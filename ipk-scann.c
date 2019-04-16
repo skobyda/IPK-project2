@@ -33,6 +33,64 @@
 
  * */
 
+/* ethernet headers are always exactly 14 bytes */
+#define SIZE_ETHERNET 14
+
+    /* Ethernet addresses are 6 bytes */
+#define ETHER_ADDR_LEN	6
+
+	/* Ethernet header */
+	struct sniff_ethernet {
+		u_char ether_dhost[ETHER_ADDR_LEN]; /* Destination host address */
+		u_char ether_shost[ETHER_ADDR_LEN]; /* Source host address */
+		u_short ether_type; /* IP? ARP? RARP? etc */
+	};
+
+	/* IP header */
+	struct sniff_ip {
+		u_char ip_vhl;		/* version << 4 | header length >> 2 */
+		u_char ip_tos;		/* type of service */
+		u_short ip_len;		/* total length */
+		u_short ip_id;		/* identification */
+		u_short ip_off;		/* fragment offset field */
+	#define IP_RF 0x8000		/* reserved fragment flag */
+	#define IP_DF 0x4000		/* dont fragment flag */
+	#define IP_MF 0x2000		/* more fragments flag */
+	#define IP_OFFMASK 0x1fff	/* mask for fragmenting bits */
+		u_char ip_ttl;		/* time to live */
+		u_char ip_p;		/* protocol */
+		u_short ip_sum;		/* checksum */
+		struct in_addr ip_src,ip_dst; /* source and dest address */
+	};
+	#define IP_HL(ip)		(((ip)->ip_vhl) & 0x0f)
+	#define IP_V(ip)		(((ip)->ip_vhl) >> 4)
+
+	/* TCP header */
+	typedef u_int tcp_seq;
+
+	struct sniff_tcp {
+		u_short th_sport;	/* source port */
+		u_short th_dport;	/* destination port */
+		tcp_seq th_seq;		/* sequence number */
+		tcp_seq th_ack;		/* acknowledgement number */
+		u_char th_offx2;	/* data offset, rsvd */
+	#define TH_OFF(th)	(((th)->th_offx2 & 0xf0) >> 4)
+		u_char th_flags;
+	#define TH_FIN 0x01
+	#define TH_SYN 0x02
+	#define TH_RST 0x04
+	#define TH_PUSH 0x08
+	#define TH_ACK 0x10
+	#define TH_URG 0x20
+	#define TH_ECE 0x40
+	#define TH_CWR 0x80
+	#define TH_FLAGS (TH_FIN|TH_SYN|TH_RST|TH_ACK|TH_URG|TH_ECE|TH_CWR)
+		u_short th_win;		/* window */
+		u_short th_sum;		/* checksum */
+		u_short th_urp;		/* urgent pointer */
+    };
+
+
 /*
     96 bit (12 bytes) pseudo header needed for tcp header checksum calculation
 */
@@ -72,8 +130,35 @@ unsigned short csum(unsigned short *ptr,int nbytes)
     return(answer);
 }
 
+void myHandler(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
+	const struct sniff_ip *ip; /* The IP header */
+	const struct sniff_tcp *tcp; /* The TCP header */
+
+	u_int size_ip;
+	u_int size_tcp;
+
+	ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
+	size_ip = IP_HL(ip)*4;
+	if (size_ip < 20) {
+		printf("   * Invalid IP header length: %u bytes\n", size_ip);
+		return;
+	}
+	tcp = (struct sniff_tcp*)(packet + SIZE_ETHERNET + size_ip);
+	size_tcp = TH_OFF(tcp)*4;
+	if (size_tcp < 20) {
+		printf("   * Invalid TCP header length: %u bytes\n", size_tcp);
+		return;
+	}
+
+    printf("%x\n", tcp->th_sport);
+    if ((tcp->th_flags & TH_SYN) && (tcp->th_flags & TH_ACK))
+        printf("port is open\n");
+    if ((tcp->th_flags & TH_RST) && (tcp->th_flags & TH_ACK))
+        printf("port is closed\n");
+}
+
 int main(int argc, char *argv[]) {
-    int TMP_port[2] = {80, 20}; // TODO filter
+    int TMP_port[2] = {631, 80}; // TODO filter
     int TMP_port_len = 2;
     char TMP_dest_addr[] = "127.0.0.1"; // TODO
     char TMP_source_addr[] = "127.0.0.1"; // TODO
@@ -98,6 +183,7 @@ int main(int argc, char *argv[]) {
             return(2);
         }
     }
+    dev = "lo"; //TODO
 
     /* Find the properties for the device */
     if (pcap_lookupnet(dev, &net, &mask, errbuf) == -1) {
@@ -106,6 +192,7 @@ int main(int argc, char *argv[]) {
         mask = 0;
     }
     (void) mask;
+    printf("iface:%s\n", dev);
 
     /* Open the session in promiscuous mode */
     handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
@@ -151,10 +238,10 @@ int main(int argc, char *argv[]) {
         strcpy(data , "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
         //some address resolution
-        strcpy(source_ip , "192.168.1.2");
+        strcpy(source_ip , "127.0.0.1");
         sin.sin_family = AF_INET;
         sin.sin_port = htons(TMP_port[i]);
-        sin.sin_addr.s_addr = inet_addr ("1.2.3.4");
+        sin.sin_addr.s_addr = inet_addr ("127.0.0.1");
 
         //Fill in the IP Header
         iph->ihl = 5;
@@ -173,8 +260,8 @@ int main(int argc, char *argv[]) {
         iph->check = csum ((unsigned short *) datagram, iph->tot_len);
 
         //TCP Header
-        tcph->source = htons (1234);
-        tcph->dest = htons (80);
+        tcph->source = htons (42);
+        tcph->dest = htons (TMP_port[i]);
         tcph->seq = 0;
         tcph->ack_seq = 0;
         tcph->doff = 5; //tcp header size
@@ -208,8 +295,9 @@ int main(int argc, char *argv[]) {
         const int *val = &one;
 
         /* Compile and apply the filter */
-        char filter_exp[11];	/* The filter expression */
-        sprintf(filter_exp, "port %d", TMP_port[i]);
+        char* filter_exp = malloc(sizeof(char) * 40);	/* The filter expression */
+        sprintf(filter_exp, "tcp src port %d and tcp dst port 42", TMP_port[i]);
+        printf("filter:%s\n", filter_exp);
         if (pcap_compile(handle, &fp, filter_exp, 0, net) == -1) {
             fprintf(stderr, "Couldn't parse filter %s: %s\n", filter_exp, pcap_geterr(handle));
             return(2);
@@ -219,31 +307,27 @@ int main(int argc, char *argv[]) {
             return(2);
         }
 
-        if (setsockopt (sock, IPPROTO_IP, IP_HDRINCL, val, sizeof (one)) < 0)
-        {
+        if (setsockopt (sock, IPPROTO_IP, IP_HDRINCL, val, sizeof (one)) < 0) {
             perror("Error setting IP_HDRINCL");
             exit(0);
         }
 
         //Send the packet
-        if (sendto (sock, datagram, iph->tot_len , 0, (struct sockaddr *) &sin, sizeof (sin)) < 0)
-        {
+        if (sendto (sock, datagram, iph->tot_len , 0, (struct sockaddr *) &sin, sizeof (sin)) < 0) {
             perror("sendto failed");
-        }
-        //Data send successfully
-        else
-        {
+        } else {
             printf ("Packet Send. Length : %d \n" , iph->tot_len);
         }
 
-        packet = pcap_next(handle, &header);
+        // packet = pcap_next(handle, &header);
+        pcap_loop(handle, 1, myHandler, NULL);
+        // Grab packet
 
         /* Print its length */
 		printf("Jacked a packet with length of [%d]\n", header.len);
 		/* And close the session */
-		pcap_close(handle);
-		return(0);
     }
+    pcap_close(handle);
     //
     //
     //
@@ -252,45 +336,5 @@ int main(int argc, char *argv[]) {
     //
     //
 
-    //
-    // struct iphdr *
-    // struct tcphdr *
-    // struct sockaddr_in
-    // TODO naplnit IP a TCP/IDP struktury
-    // checksum
-    //
-
-    // TODO for each port
-        // addr.sin_port = htons(PORT);
-        // addr.sin_addr.s_addr = 0;
-        // addr.sin_addr.s_addr = INADDR_ANY;
-        // addr.sin_family = AF_INET;
-        // if(bind(sock, (struct sockaddr *)&addr,sizeof(struct sockaddr_in) ) == -1) {
-        // printf("Error binding socket\n");
-        // return -1;
-        // }
-
-        // setsockopt()
-
-        /* Compile and apply the filter */
-        /* 
-        if (pcap_compile(handle, &fp, filter_exp, 0, net) == -1) {
-            fprintf(stderr, "Couldn't parse filter %s: %s\n", filter_exp, pcap_geterr(handle));
-            return(2);
-        }
-        if (pcap_setfilter(handle, &fp) == -1) {
-            fprintf(stderr, "Couldn't install filter %s: %s\n", filter_exp, pcap_geterr(handle));
-            return(2);
-        }
-
-
-        sendto(sock, packet, packet_length, 0, sockaddr*, sizeof(sockaddr)); */
-        //
-        /* Grab a packet */
-        // packet = pcap_next(handle, &header); // or pcap_loop ak timeout nefunguje
-        /* Print its length */
-        // printf("Jacked a packet with length of [%d]\n", header.len);
-        /* And close the session */
-        // pcap_close(handle);
     return(0);
 }

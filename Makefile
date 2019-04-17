@@ -1,6 +1,6 @@
 all:
-	gcc -Wall -pedantic -o ipk ipk-scann.c -lpcap -Wno-deprecated-declarations
+	gcc -Wall -pedantic -o ipk-scan ipk-scan.c -lpcap -Wno-deprecated-declarations
 
 clean:
-	rm -rf ipk-scann *~
+	rm -rf ipk-scan *~
 

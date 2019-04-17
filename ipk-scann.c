@@ -10,9 +10,12 @@
 #include <netinet/in.h>
 #include <strings.h>
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <signal.h>
 
 #include <unistd.h>
 
+pcap_t *handle;
 
 /*
  parametre vsetky na string
@@ -138,13 +141,13 @@ void my_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
     size_ip = IP_HL(ip)*4;
     if (size_ip < 20) {
         printf("   * Invalid IP header length: %u bytes\n", size_ip);
-        return;
+        exit(1);
     }
     tcp = (struct sniff_tcp*)(packet + SIZE_ETHERNET + size_ip);
     size_tcp = TH_OFF(tcp)*4;
     if (size_tcp < 20) {
         printf("   * Invalid TCP header length: %u bytes\n", size_tcp);
-        return;
+        exit(1);
     }
 
     if ((tcp->th_flags & TH_SYN) && (tcp->th_flags & TH_ACK))
@@ -153,7 +156,7 @@ void my_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
         printf("closed\n");
 }
 
-void parge_arguments(int argc, char *argv[], char *arg_dest_addr, int *arg_tcp_ports, int *arg_udp_ports, char *iface, int *tcp_len, int *udp_len) {
+void parge_arguments(int argc, char *argv[], char *arg_dest_addr, int *arg_tcp_ports, int *arg_udp_ports, char **iface, int *tcp_len, int *udp_len) {
     for (int i = 1; i < argc - 1; i += 2) {
         if (strcmp(argv[i], "-pt") == 0) {
             char *pt = strtok (argv[i + 1],",");
@@ -176,15 +179,35 @@ void parge_arguments(int argc, char *argv[], char *arg_dest_addr, int *arg_tcp_p
                 (*udp_len)++;
             }
         } else if (strcmp(argv[i], "-i") == 0) {
-            iface = strcpy(iface, argv[i + 1]);
+            *iface = malloc(sizeof(char) * 100);
+            strcpy(*iface, argv[i + 1]);
         } else {
             // TODO error
         }
     }
 
     strcpy(arg_dest_addr, argv[argc-1]);
-    if (strcmp(arg_dest_addr, "localhost") == 0)
+
+    struct sockaddr_in tmp;
+    if (strcmp(arg_dest_addr, "localhost") == 0) {
         strcpy(arg_dest_addr, "127.0.0.1");
+    } else if (inet_pton(AF_INET, arg_dest_addr, &(tmp.sin_addr)) == 0) {
+        struct hostent *he;
+        struct in_addr **addr_list;
+        int i;
+
+        if ((he = gethostbyname(arg_dest_addr)) == NULL) {
+            herror("Error: Could not convert hostname to IP");
+            exit(1);
+        }
+
+        addr_list = (struct in_addr **) he->h_addr_list;
+
+        for(i = 0; addr_list[i] != NULL; i++) {
+            strcpy(arg_dest_addr , inet_ntoa(*addr_list[i]) );
+            break;
+        }
+    }
 }
 
 // Source: https://www.binarytides.com/raw-sockets-c-code-linux/
@@ -230,15 +253,19 @@ void fill_pseudo_header(struct pseudo_header *psh, char *source_ip, struct socka
     psh->tcp_length = htons(sizeof(struct tcphdr) + strlen(data) );
 }
 
+void alarm_handler(int sig) {
+    pcap_breakloop(handle);
+}
+
+
 // Source: https://www.tcpdump.org/pcap.html
 int main(int argc, char *argv[]) {
     int *arg_tcp_ports = malloc(sizeof(int) * 100);
     int *arg_udp_ports = malloc(sizeof(int) * 100);
     int arg_tcp_ports_len = 0;
     int arg_udp_ports_len = 0;
-    char* arg_dest_addr = malloc(sizeof(char) * 100);
-    char* arg_source_addr = "127.0.0.1";
-    pcap_t *handle;
+    char *arg_dest_addr = malloc(sizeof(char) * 100);
+    char *arg_source_addr = "127.0.0.1";
     char *dev;
     char errbuf[PCAP_ERRBUF_SIZE];
     struct bpf_program fp;
@@ -247,8 +274,8 @@ int main(int argc, char *argv[]) {
 
     int sock;
 
-    char *iface = malloc(sizeof(char) * 100);
-    parge_arguments(argc, argv, arg_dest_addr, arg_tcp_ports, arg_udp_ports, iface, &arg_tcp_ports_len, &arg_udp_ports_len);
+    char *iface = NULL;
+    parge_arguments(argc, argv, arg_dest_addr, arg_tcp_ports, arg_udp_ports, &iface, &arg_tcp_ports_len, &arg_udp_ports_len);
 
     // PCAP LOOKUPDEV
     if (strcmp(arg_dest_addr, "127.0.0.1")) {
@@ -256,7 +283,7 @@ int main(int argc, char *argv[]) {
             dev = pcap_lookupdev(errbuf);
             if (dev == NULL) {
                 fprintf(stderr, "Couldn't find default device: %s\n", errbuf);
-                return(2);
+                exit(1);
             }
         } else {
             dev = iface;
@@ -276,14 +303,14 @@ int main(int argc, char *argv[]) {
     handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
     if (handle == NULL) {
         fprintf(stderr, "Couldn't open device %s: %s\n", dev, errbuf);
-        return(2);
+        exit(1);
     }
 
     // SOCKET CREATION
     sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sock == -1) {
         printf("Error opening socket\n");
-        return -1;
+        exit(1);
     }
 
     for (int i = 0; i < arg_tcp_ports_len; i++) {
@@ -329,19 +356,19 @@ int main(int argc, char *argv[]) {
         //PCAP COMPILE
         if (pcap_compile(handle, &fp, filter_exp, 0, net) == -1) {
             fprintf(stderr, "Couldn't parse filter %s: %s\n", filter_exp, pcap_geterr(handle));
-            return(2);
+            exit(1);
         }
 
         //PCAP FILTER
         if (pcap_setfilter(handle, &fp) == -1) {
             fprintf(stderr, "Couldn't install filter %s: %s\n", filter_exp, pcap_geterr(handle));
-            return(2);
+            exit(1);
         }
 
         //SET SOCKET
         if (setsockopt (sock, IPPROTO_IP, IP_HDRINCL, val, sizeof (one)) < 0) {
             perror("Error setting IP_HDRINCL");
-            exit(0);
+            exit(1);
         }
 
         //SEND PACKET
@@ -355,8 +382,12 @@ int main(int argc, char *argv[]) {
         bool try_filtered = false;
         struct pcap_pkthdr header;
         const u_char *packet;
-        
+
         while(42) {
+
+            alarm(1);
+            signal(SIGALRM, alarm_handler);
+
             packet = pcap_next(handle, &header);
 
             if (packet != NULL) {
@@ -379,17 +410,21 @@ int main(int argc, char *argv[]) {
                     exit(1);
                 }
 
-                if ((tcp->th_flags & TH_SYN) && (tcp->th_flags & TH_ACK))
+                if ((tcp->th_flags & TH_SYN) && (tcp->th_flags & TH_ACK)) {
                     printf("open\n");
-                if ((tcp->th_flags & TH_RST) && (tcp->th_flags & TH_ACK))
+                    break;
+                }
+                if ((tcp->th_flags & TH_RST) && (tcp->th_flags & TH_ACK)) {
                     printf("closed\n");
+                    break;
+                }
             } else if (try_filtered) {
                 printf("filtered\n");
                 break;
             } else {
                 try_filtered = true;
+                continue;
             }
-        break;
         }
     }
     pcap_close(handle);

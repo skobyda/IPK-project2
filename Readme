@@ -1,10 +1,8 @@
 Jednoduchý program na scannovanie portov
-## Použitie:
 
-```sh
+Použitie:
 $ make
 $ ./ipk-scan {-i <interface>} -pu <port-ranges> -pt <port-ranges> [<domain-name> | <IP-address>]
-```
 
 - -pu - UDP
 - -pt - TCP

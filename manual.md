@@ -6,24 +6,11 @@
 &nbsp;
 &nbsp;
 &nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
 # IPK Projekt 2 - Varianta OMEGA: Scanner síťových služeb
 
 #### Autor: Simon Kobyda, FIT VUTBR
 
 [![N|Solid](https://www.fit.vutbr.cz/images/fitnewz.png)](https://www.fit.vutbr.cz/)
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
-&nbsp;
 &nbsp;
 &nbsp;
 &nbsp;

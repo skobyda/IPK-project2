@@ -1,0 +1,13 @@
+Jednoduchý program na scannovanie portov
+## Použitie:
+
+```sh
+$ make
+$ ./ipk-scan {-i <interface>} -pu <port-ranges> -pt <port-ranges> [<domain-name> | <IP-address>]
+```
+
+- -pu - UDP
+- -pt - TCP
+- -i - názov interface/devicu. Ak je ako cieľová adresa localhost (loopback), tak je interface prepísaný na "lo"
+- <port-ranges> - porty, bez medzier, odelenné čiarkami
+- [<domain-name> | <IP-address>] - cieľová adresa
